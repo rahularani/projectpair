@@ -24,10 +24,16 @@ export default function Login() {
 
     setLoading(true)
     try {
-      await login(form.email, form.password)
+      const userData = await login(form.email, form.password)
       onLogin()
       showToast('Welcome back!', 'success')
-      navigate(from, { replace: true })
+      
+      // Redirect to admin dashboard if user is admin
+      if (userData && (userData.role === 'admin' || userData.role === 'Admin')) {
+        navigate('/admin', { replace: true })
+      } else {
+        navigate(from, { replace: true })
+      }
     } catch (err) {
       const msg = err.response?.data?.error || 'Login failed. Please try again.'
       setError(msg)

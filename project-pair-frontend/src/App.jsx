@@ -9,6 +9,7 @@ import Navbar from './components/Navbar'
 import Footer from './components/Footer'
 import Toast from './components/Toast'
 import ProtectedRoute from './components/ProtectedRoute'
+import AdminRoute from './components/AdminRoute'
 
 // Eager load critical pages
 import Landing from './pages/Landing'
@@ -27,6 +28,7 @@ const Portfolio = lazy(() => import('./pages/Portfolio'))
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'))
 const ResetPassword = lazy(() => import('./pages/ResetPassword'))
 const Analytics = lazy(() => import('./pages/Analytics'))
+const Admin = lazy(() => import('./pages/Admin'))
 
 const PageWrapper = ({ children }) => (
   <motion.div
@@ -46,7 +48,7 @@ const PageFallback = () => (
   </div>
 )
 
-const NO_FOOTER = ['/login', '/signup', '/chat', '/forgot-password', '/reset-password']
+const NO_FOOTER = ['/login', '/signup', '/chat', '/forgot-password', '/reset-password', '/admin']
 
 function AppContent() {
   const location = useLocation()
@@ -77,6 +79,7 @@ function AppContent() {
             <Route path="/chat" element={<ProtectedRoute><PageWrapper><Chat /></PageWrapper></ProtectedRoute>} />
             <Route path="/portfolio" element={<ProtectedRoute><PageWrapper><Portfolio /></PageWrapper></ProtectedRoute>} />
             <Route path="/analytics" element={<ProtectedRoute><PageWrapper><Analytics /></PageWrapper></ProtectedRoute>} />
+            <Route path="/admin" element={<AdminRoute><PageWrapper><Admin /></PageWrapper></AdminRoute>} />
 
             {/* 404 */}
             <Route path="*" element={<PageWrapper><NotFound /></PageWrapper>} />

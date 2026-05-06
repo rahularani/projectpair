@@ -11,6 +11,7 @@ import { getUserReviews, createReview } from '../controllers/reviewsController.j
 import { getNotifications, markAllRead, markOneRead } from '../controllers/notificationsController.js'
 import { getAnalytics } from '../controllers/analyticsController.js'
 import { uploadAvatar as uploadAvatarCtrl, uploadChatFile } from '../controllers/uploadController.js'
+import { getDashboardStats, getUsers, getProjects as getAdminProjects, getSystemHealth } from '../controllers/adminController.js'
 import { uploadAvatar, uploadFile, uploadLocal, isCloudinaryConfigured } from '../services/upload.js'
 import { authenticate } from '../middleware/auth.js'
 
@@ -137,5 +138,11 @@ router.post('/upload/file', authenticate, fileMiddleware, uploadChatFile)
 
 // ── Analytics ─────────────────────────────────────────
 router.get('/analytics', authenticate, getAnalytics)
+
+// ── Admin ─────────────────────────────────────────────
+router.get('/admin/dashboard', authenticate, getDashboardStats)
+router.get('/admin/users', authenticate, getUsers)
+router.get('/admin/projects', authenticate, getAdminProjects)
+router.get('/admin/health', authenticate, getSystemHealth)
 
 export default router
