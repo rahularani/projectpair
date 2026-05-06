@@ -24,6 +24,7 @@ export default function Signup() {
     if (!form.name.trim()) return 'Full name is required'
     if (!form.email.trim() || !/\S+@\S+\.\S+/.test(form.email)) return 'Valid email is required'
     if (form.password.length < 8) return 'Password must be at least 8 characters'
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(form.password)) return 'Password must include uppercase, lowercase, and a number'
     return null
   }
 
@@ -93,7 +94,7 @@ export default function Signup() {
               <>
                 <Field icon={User} label="Full Name" type="text" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="Alex Kumar" />
                 <Field icon={Mail} label="Email" type="email" value={form.email} onChange={v => setForm(f => ({ ...f, email: v }))} placeholder="you@example.com" />
-                <Field icon={Lock} label="Password" type="password" value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))} placeholder="Min 8 characters" />
+                <Field icon={Lock} label="Password" type="password" value={form.password} onChange={v => setForm(f => ({ ...f, password: v }))} placeholder="Min 8 chars, uppercase, number" />
               </>
             ) : (
               <>

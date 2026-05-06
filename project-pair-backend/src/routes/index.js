@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { body, query, validationResult } from 'express-validator'
+import { body, validationResult } from 'express-validator'
 import rateLimit from 'express-rate-limit'
 import { register, login, refreshToken, logout, getMe, forgotPassword, resetPassword } from '../controllers/authController.js'
 import { getProjects, getProject, createProject, updateProject, deleteProject } from '../controllers/projectController.js'
@@ -13,11 +13,11 @@ import { getAnalytics } from '../controllers/analyticsController.js'
 import { uploadAvatar as uploadAvatarCtrl, uploadChatFile } from '../controllers/uploadController.js'
 import { getDashboardStats, getUsers, getProjects as getAdminProjects, getSystemHealth } from '../controllers/adminController.js'
 import { uploadAvatar, uploadFile, uploadLocal, isCloudinaryConfigured } from '../services/upload.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireAdmin } from '../middleware/auth.js'
 
 const router = Router()
 
-// Rate limiters
+// ── Rate limiters ─────────────────────────────────────
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -26,10 +26,18 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-const refreshLimiter = rateLimit({ // 🟠 FIX: rate limit refresh endpoint
+const refreshLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 10,
   message: { error: 'Too many refresh attempts.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+const writeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
 })
@@ -67,7 +75,7 @@ router.post('/auth/reset-password',
 
 // ── Users ─────────────────────────────────────────────
 router.get('/users/:id', getUser)
-router.put('/users/me', authenticate,
+router.put('/users/me', authenticate, writeLimiter,
   body('name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
   validate, updateMe
 )
@@ -75,29 +83,29 @@ router.put('/users/me', authenticate,
 // ── Projects ──────────────────────────────────────────
 router.get('/projects', getProjects)
 router.get('/projects/:id', getProject)
-router.post('/projects', authenticate,
+router.post('/projects', authenticate, writeLimiter,
   body('title').trim().notEmpty().withMessage('Title is required'),
   body('description').trim().notEmpty().withMessage('Description is required'),
   body('category').trim().notEmpty().withMessage('Category is required'),
   validate, createProject
 )
-router.put('/projects/:id', authenticate, updateProject)
+router.put('/projects/:id', authenticate, writeLimiter, updateProject)
 router.delete('/projects/:id', authenticate, deleteProject)
 
 // ── Tasks ─────────────────────────────────────────────
 router.get('/tasks/project/:projectId', authenticate, getProjectTasks)
-router.post('/tasks', authenticate,
+router.post('/tasks', authenticate, writeLimiter,
   body('title').trim().notEmpty().withMessage('Title is required'),
   body('project_id').isInt().withMessage('project_id is required'),
   validate, createTask
 )
-router.put('/tasks/:id', authenticate, updateTask)
+router.put('/tasks/:id', authenticate, writeLimiter, updateTask)
 router.delete('/tasks/:id', authenticate, deleteTask)
 
 // ── Messages ──────────────────────────────────────────
 router.get('/messages/conversations', authenticate, getConversations)
 router.get('/messages/:userId', authenticate, getConversation)
-router.post('/messages', authenticate,
+router.post('/messages', authenticate, writeLimiter,
   body('receiver_id').isInt().withMessage('receiver_id is required'),
   body('content').trim().notEmpty().withMessage('Message content is required'),
   validate, sendMessage
@@ -110,7 +118,7 @@ router.put('/notifications/:id/read', authenticate, markOneRead)
 
 // ── Reviews ───────────────────────────────────────────
 router.get('/reviews/:userId', getUserReviews)
-router.post('/reviews', authenticate,
+router.post('/reviews', authenticate, writeLimiter,
   body('reviewee_id').isInt().withMessage('reviewee_id is required'),
   body('project_id').isInt().withMessage('project_id is required'),
   body('rating').isInt({ min: 1, max: 5 }).withMessage('Rating must be 1–5'),
@@ -118,14 +126,14 @@ router.post('/reviews', authenticate,
 )
 
 // ── Proposals ─────────────────────────────────────────
-router.post('/proposals', authenticate,
+router.post('/proposals', authenticate, writeLimiter,
   body('project_id').isInt().withMessage('project_id is required'),
   body('message').trim().notEmpty().withMessage('Message is required'),
   validate, sendProposal
 )
 router.get('/proposals/mine', authenticate, getMyProposals)
 router.get('/proposals/received', authenticate, getReceivedProposals)
-router.put('/proposals/:id', authenticate,
+router.put('/proposals/:id', authenticate, writeLimiter,
   body('status').isIn(['accepted', 'rejected']).withMessage('Status must be accepted or rejected'),
   validate, respondToProposal
 )
@@ -139,10 +147,10 @@ router.post('/upload/file', authenticate, fileMiddleware, uploadChatFile)
 // ── Analytics ─────────────────────────────────────────
 router.get('/analytics', authenticate, getAnalytics)
 
-// ── Admin ─────────────────────────────────────────────
-router.get('/admin/dashboard', authenticate, getDashboardStats)
-router.get('/admin/users', authenticate, getUsers)
-router.get('/admin/projects', authenticate, getAdminProjects)
-router.get('/admin/health', authenticate, getSystemHealth)
+// ── Admin (authenticate + requireAdmin) ───────────────
+router.get('/admin/dashboard', authenticate, requireAdmin, getDashboardStats)
+router.get('/admin/users', authenticate, requireAdmin, getUsers)
+router.get('/admin/projects', authenticate, requireAdmin, getAdminProjects)
+router.get('/admin/health', authenticate, requireAdmin, getSystemHealth)
 
 export default router

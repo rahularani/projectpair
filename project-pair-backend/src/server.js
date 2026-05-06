@@ -10,26 +10,47 @@ import jwt from 'jsonwebtoken'
 import { mkdirSync } from 'fs'
 import routes from './routes/index.js'
 import { logger, requestLogger } from './services/logger.js'
+import { Message, User } from './models/index.js'
 
 dotenv.config()
-mkdirSync('uploads', { recursive: true }) // ensure uploads dir exists
+
+// ── Validate required env vars at startup ─────────────
+const REQUIRED_ENV = ['JWT_SECRET', 'JWT_REFRESH_SECRET', 'DB_HOST', 'DB_USER', 'DB_PASS']
+const missing = REQUIRED_ENV.filter(k => !process.env[k])
+if (missing.length) {
+  console.error(`❌ Missing required environment variables: ${missing.join(', ')}`)
+  process.exit(1)
+}
+
+mkdirSync('uploads', { recursive: true })
 
 const app = express()
 const httpServer = createServer(app)
 const PORT = process.env.PORT || 5000
-const JWT_SECRET = process.env.JWT_SECRET || 'pp_secret_key'
+const JWT_SECRET = process.env.JWT_SECRET
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173'
+const allowedOrigins = CLIENT_URL.split(',').map(o => o.trim())
 
 // ── Security ──────────────────────────────────────────
-app.use(helmet({ crossOriginResourcePolicy: false }))
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      connectSrc: ["'self'", ...allowedOrigins],
+    },
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true },
+}))
 app.use(xssClean())
 app.use(cookieParser())
 
 // ── CORS ──────────────────────────────────────────────
-const allowedOrigins = CLIENT_URL.split(',').map(o => o.trim())
 app.use(cors({
   origin: (origin, cb) => {
-    // Allow requests with no origin (mobile apps, curl, Render health checks)
     if (!origin || allowedOrigins.includes(origin)) return cb(null, true)
     cb(new Error(`CORS blocked: ${origin}`))
   },
@@ -37,7 +58,7 @@ app.use(cors({
 }))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true }))
-app.use('/uploads', express.static('uploads')) // serve local uploads fallback
+app.use('/uploads', express.static('uploads'))
 
 // ── Request logger ────────────────────────────────────
 app.use(requestLogger)
@@ -50,12 +71,17 @@ app.get('/health', (_, res) => res.json({
   onlineUsers: global.onlineUsers ? global.onlineUsers.size : 0,
 }))
 
+// ── Global error handler ──────────────────────────────
 app.use((err, req, res, next) => {
   logger.error(err.message, { stack: err.stack, path: req.path })
-  res.status(err.status || 500).json({ error: err.message || 'Internal server error' })
+  const status = err.status || 500
+  const message = process.env.NODE_ENV === 'production' && status === 500
+    ? 'Internal server error'
+    : err.message
+  res.status(status).json({ error: message })
 })
 
-// ── Socket.io setup ───────────────────────────────────
+// ── Socket.io ─────────────────────────────────────────
 const io = new Server(httpServer, {
   cors: {
     origin: (origin, cb) => {
@@ -67,7 +93,7 @@ const io = new Server(httpServer, {
   },
 })
 
-// Map: userId → Set<socketId> (supports multiple tabs per user)
+// Map: userId → Set<socketId> (multi-tab support)
 global.onlineUsers = new Map()
 
 const getSocketIds = (userId) => global.onlineUsers.get(userId) || new Set()
@@ -75,6 +101,7 @@ const emitToUser = (userId, event, data) => {
   getSocketIds(userId).forEach(sid => io.to(sid).emit(event, data))
 }
 
+// Socket auth middleware
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token
   if (!token) return next(new Error('No token'))
@@ -94,13 +121,13 @@ io.on('connection', (socket) => {
   global.onlineUsers.get(userId).add(socket.id)
   logger.info(`🟢 User ${userId} connected (socket: ${socket.id})`)
 
-  io.emit('user_online', { userId })
+  // Only notify relevant users, not broadcast to everyone
+  emitToUser(userId, 'user_online', { userId })
 
   socket.on('send_message', async (data) => {
     try {
       const { receiver_id, content } = data
       if (!receiver_id || !content?.trim()) return
-      const { Message, User } = await import('./models/index.js')
       const msg = await Message.create({ sender_id: userId, receiver_id, content: content.trim() })
       const full = await Message.findByPk(msg.id, {
         include: [
@@ -112,23 +139,25 @@ io.on('connection', (socket) => {
       socket.emit('receive_message', payload)
       emitToUser(receiver_id, 'receive_message', payload)
     } catch (err) {
-      socket.emit('message_error', { error: err.message })
+      logger.error('Socket send_message error', { error: err.message })
+      socket.emit('message_error', { error: 'Failed to send message' })
     }
   })
 
   socket.on('typing', ({ receiver_id, isTyping }) => {
-    emitToUser(receiver_id, 'typing', { userId, isTyping })
+    if (receiver_id) emitToUser(receiver_id, 'typing', { userId, isTyping })
   })
 
   socket.on('mark_read', async ({ sender_id }) => {
     try {
-      const { Message } = await import('./models/index.js')
       await Message.update(
         { is_read: true },
         { where: { sender_id, receiver_id: userId, is_read: false } }
       )
       emitToUser(sender_id, 'messages_read', { by: userId })
-    } catch {}
+    } catch (err) {
+      logger.error('Socket mark_read error', { error: err.message })
+    }
   })
 
   socket.on('disconnect', () => {
@@ -137,16 +166,31 @@ io.on('connection', (socket) => {
       sockets.delete(socket.id)
       if (sockets.size === 0) {
         global.onlineUsers.delete(userId)
-        io.emit('user_offline', { userId })
+        emitToUser(userId, 'user_offline', { userId })
       }
     }
     logger.info(`🔴 User ${userId} disconnected`)
   })
 })
 
-// Export io globally for notification helper
 export { io }
 global.io = io
+
+// ── Graceful shutdown ─────────────────────────────────
+const shutdown = async (signal) => {
+  logger.info(`${signal} received — shutting down gracefully`)
+  httpServer.close(async () => {
+    try {
+      const { default: sequelize } = await import('./config/database.js')
+      await sequelize.close()
+      logger.info('Database connection closed')
+    } catch {}
+    process.exit(0)
+  })
+  setTimeout(() => process.exit(1), 10000)
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
 
 // ── Start server ──────────────────────────────────────
 httpServer.listen(PORT, () => {
@@ -156,30 +200,15 @@ httpServer.listen(PORT, () => {
 })
 
 async function connectDB() {
-  const host = process.env.DB_HOST || 'localhost'
-  const name = process.env.DB_NAME || 'projectpair'
-  const user = process.env.DB_USER || 'root'
-  const pass = process.env.DB_PASS || ''
-
-  console.log(`🔌 Connecting to MySQL...`)
-  console.log(`   Host: ${host} | DB: ${name} | User: ${user} | Password: ${pass ? '(set)' : '(empty)'}`)
-
   try {
     const { default: sequelize } = await import('./config/database.js')
     await sequelize.authenticate()
     await sequelize.sync({ alter: process.env.NODE_ENV !== 'production' })
-    console.log('✅ MySQL connected and tables synced\n')
+    logger.info('✅ MySQL connected and tables synced')
     global.dbConnected = true
   } catch (err) {
     global.dbConnected = false
-    console.error('❌ MySQL connection failed:', err.message)
-    if (err.message.includes('Access denied')) {
-      console.error('   → Check DB_USER and DB_PASS in .env')
-    } else if (err.message.includes('ECONNREFUSED')) {
-      console.error('   → MySQL service not running. Run: Start-Service MySQL80')
-    } else if (err.message.includes("doesn't exist")) {
-      console.error(`   → Create DB: mysql -u ${user} -p -e "CREATE DATABASE ${name};"`)
-    }
-    console.error('⚠️  API routes will fail until DB is connected.\n')
+    logger.error('❌ MySQL connection failed', { error: err.message })
+    logger.warn('⚠️  API routes will fail until DB is connected.')
   }
 }

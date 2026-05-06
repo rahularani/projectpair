@@ -14,7 +14,9 @@ export const AppProvider = ({ children }) => {
     if (!localStorage.getItem('pp_token')) return
     try {
       const res = await notificationsAPI.getAll()
-      setNotifications(res.data)
+      // Handle both paginated { notifications: [] } and legacy [] response shapes
+      const data = Array.isArray(res.data) ? res.data : (res.data.notifications || [])
+      setNotifications(data)
     } catch {}
   }, [])
 

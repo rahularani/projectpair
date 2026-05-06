@@ -1,52 +1,42 @@
 import { User, Project, PairRequest, Task, Review, Message } from '../models/index.js'
+import sequelize from '../config/database.js'
+import { fn, col } from 'sequelize'
+
+// All routes here are protected by authenticate + requireAdmin middleware in routes/index.js
 
 export const getDashboardStats = async (req, res) => {
   try {
-    // Only admins can access
-    const user = await User.findByPk(req.user.id)
-    if (user.role !== 'admin' && user.role !== 'Admin') {
-      return res.status(403).json({ error: 'Admin access required' })
-    }
-
-    const [totalUsers, totalProjects, totalProposals, completedProjects, avgRating] = await Promise.all([
+    const [totalUsers, totalProjects, totalProposals, completedProjects, ratingResult] = await Promise.all([
       User.count(),
       Project.count(),
       PairRequest.count(),
       Project.count({ where: { status: 'completed' } }),
-      User.findAll({
-        attributes: [[require('sequelize').fn('AVG', require('sequelize').col('rating')), 'avgRating']],
+      User.findOne({
+        attributes: [[fn('AVG', col('rating')), 'avgRating']],
         raw: true,
       }),
     ])
 
-    const stats = {
+    res.json({
       totalUsers: totalUsers || 0,
       totalProjects: totalProjects || 0,
       totalProposals: totalProposals || 0,
       completedProjects: completedProjects || 0,
-      avgRating: avgRating[0]?.avgRating || 0,
+      avgRating: parseFloat(ratingResult?.avgRating || 0).toFixed(2),
       timestamp: new Date().toISOString(),
-    }
-
-    res.json(stats)
+    })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ error: 'Failed to fetch dashboard stats' })
   }
 }
 
 export const getUsers = async (req, res) => {
   try {
-    // Only admins
-    const user = await User.findByPk(req.user.id)
-    if (user.role !== 'admin' && user.role !== 'Admin') {
-      return res.status(403).json({ error: 'Admin access required' })
-    }
-
-    const limit = parseInt(req.query.limit) || 50
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100)
     const offset = parseInt(req.query.offset) || 0
 
     const users = await User.findAndCountAll({
-      attributes: { exclude: ['password', 'reset_token'] },
+      attributes: { exclude: ['password', 'reset_token', 'reset_token_expiry'] },
       limit,
       offset,
       order: [['createdAt', 'DESC']],
@@ -54,19 +44,13 @@ export const getUsers = async (req, res) => {
 
     res.json({ total: users.count, users: users.rows })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ error: 'Failed to fetch users' })
   }
 }
 
 export const getProjects = async (req, res) => {
   try {
-    // Only admins
-    const user = await User.findByPk(req.user.id)
-    if (user.role !== 'admin' && user.role !== 'Admin') {
-      return res.status(403).json({ error: 'Admin access required' })
-    }
-
-    const limit = parseInt(req.query.limit) || 50
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100)
     const offset = parseInt(req.query.offset) || 0
 
     const projects = await Project.findAndCountAll({
@@ -78,18 +62,22 @@ export const getProjects = async (req, res) => {
 
     res.json({ total: projects.count, projects: projects.rows })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ error: 'Failed to fetch projects' })
   }
 }
 
 export const getSystemHealth = async (req, res) => {
   try {
+    await sequelize.authenticate()
     res.json({
       status: 'ok',
       database: 'connected',
+      onlineUsers: global.onlineUsers?.size || 0,
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
       timestamp: new Date().toISOString(),
     })
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ status: 'degraded', database: 'disconnected', error: err.message })
   }
 }
